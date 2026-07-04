@@ -353,32 +353,78 @@ function gmcnInstall(scope, core, config) {
     };
   }
 
-  /* ---- <img src> (classic raster mode) ---- */
+  /* ---- <img src> ----
+   *
+   * This is the hook that matters on today's google.com/maps: the WebGL
+   * renderer loads each satellite tile through `new Image()` on the main
+   * thread. Per tile Maps does:
+   *
+   *   img.crossOrigin = 'anonymous';
+   *   img.onload = ...;
+   *   img.src = '//khms1.google.com/kh/v=...?x=..&y=..&z=..';
+   *   img.decode().then(uploadTexture, tileFailed);
+   *   ... later reads img.src to match the tile in its bookkeeping ...
+   *
+   * So besides swapping in the corrected blob we must (a) keep decode()
+   * pending until the swap lands — on a src-less image it rejects
+   * immediately and Maps drops the tile — and (b) report the ORIGINAL
+   * tile URL from the src getter or Maps no longer recognizes the tile.
+   */
   if (scope.HTMLImageElement) {
-    var desc = Object.getOwnPropertyDescriptor(scope.HTMLImageElement.prototype, 'src');
+    var ImgProto = scope.HTMLImageElement.prototype;
+    var desc = Object.getOwnPropertyDescriptor(ImgProto, 'src');
+    var origDecode = ImgProto.decode;
     if (desc && desc.set) {
-      Object.defineProperty(scope.HTMLImageElement.prototype, 'src', {
+      Object.defineProperty(ImgProto, 'src', {
         configurable: true,
         enumerable: desc.enumerable,
-        get: desc.get,
+        get: function () {
+          // While a corrected blob is in flight or applied, keep answering
+          // with the original tile URL so Maps' bookkeeping still matches.
+          var st = this.__gmcn;
+          return st ? st.orig : desc.get.call(this);
+        },
         set: function (value) {
           var info = null;
           try {
             info = matchUrl(String(value));
           } catch (e) { /* never let the hook break image loading */ }
-          if (!info) return desc.set.call(this, value);
+          if (!info) {
+            this.__gmcn = null; // src reassigned: drop any pending swap
+            return desc.set.call(this, value);
+          }
           var img = this;
-          correctedBlob(info).then(function (blob) {
-            if (!blob) return desc.set.call(img, value);
+          var st = { orig: info.url };
+          img.__gmcn = st;
+          st.swap = correctedBlob(info).then(function (blob) {
+            if (img.__gmcn !== st) return; // src changed while we worked
+            if (!blob) {
+              img.__gmcn = null;
+              return desc.set.call(img, value);
+            }
             logActive();
             var objUrl = scope.URL.createObjectURL(blob);
             var cleanup = function () { scope.URL.revokeObjectURL(objUrl); };
             img.addEventListener('load', cleanup, { once: true });
             img.addEventListener('error', cleanup, { once: true });
             desc.set.call(img, objUrl);
-          }).catch(function () { desc.set.call(img, value); });
+          }).catch(function () {
+            if (img.__gmcn !== st) return;
+            img.__gmcn = null;
+            desc.set.call(img, value);
+          });
         }
       });
+
+      if (typeof origDecode === 'function') {
+        ImgProto.decode = function () {
+          var img = this;
+          var st = img.__gmcn;
+          if (!st || !st.swap) return origDecode.apply(img, arguments);
+          // Decode only after the corrected src has been swapped in.
+          return st.swap.then(function () { return origDecode.call(img); });
+        };
+      }
     }
   }
 
