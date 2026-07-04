@@ -11,7 +11,7 @@
 
 /* ------------------------------------------------------------------ *
  * Pure logic: coordinate transform + tile math. No DOM access, so it
- * can run in the window, in injected Workers, and in Node tests.
+ * can run in the window and in Node tests.
  * ------------------------------------------------------------------ */
 function gmcnCore() {
   'use strict';
@@ -362,7 +362,10 @@ function gmcnInstall(scope, core, config) {
         enumerable: desc.enumerable,
         get: desc.get,
         set: function (value) {
-          var info = matchUrl(String(value));
+          var info = null;
+          try {
+            info = matchUrl(String(value));
+          } catch (e) { /* never let the hook break image loading */ }
           if (!info) return desc.set.call(this, value);
           var img = this;
           correctedBlob(info).then(function (blob) {
@@ -379,31 +382,11 @@ function gmcnInstall(scope, core, config) {
     }
   }
 
-  /* ---- Worker: tiles may be fetched/decoded inside workers ---- */
-  if (scope.Worker && typeof scope.Blob === 'function' && scope.URL) {
-    var OrigWorker = scope.Worker;
-    var PatchedWorker = function Worker(url, opts) {
-      try {
-        if (!opts || opts.type !== 'module') {
-          var abs = new URL(String(url), scope.location.href).href;
-          if (/^https:\/\/[^/]*\bgoogle\b/.test(abs) || /\.google(apis)?\.(com|cn)\//.test(abs)) {
-            var prelude =
-              gmcnCore.toString() + '\n' +
-              gmcnInstall.toString() + '\n' +
-              'gmcnInstall(self, gmcnCore(), ' + JSON.stringify(config) + ');\n' +
-              'importScripts(' + JSON.stringify(abs) + ');';
-            var blobUrl = scope.URL.createObjectURL(
-              new scope.Blob([prelude], { type: 'text/javascript' })
-            );
-            return new OrigWorker(blobUrl, opts);
-          }
-        }
-      } catch (e) { /* CSP or URL failure: fall back to the original */ }
-      return new OrigWorker(url, opts);
-    };
-    PatchedWorker.prototype = OrigWorker.prototype;
-    scope.Worker = PatchedWorker;
-  }
+  // NOTE: no Worker patching. Wrapping Google's worker scripts in blob: URLs
+  // changes self.location inside the worker, which breaks Maps' own
+  // relative-URL resolution and crashes the whole app ("We're sorry, but an
+  // error has occurred"). Satellite raster tiles are requested from the main
+  // thread, so the fetch/XHR/<img> hooks above are sufficient.
 }
 
 /* ------------------------------------------------------------------ *
@@ -437,5 +420,11 @@ function gmcnInstall(scope, core, config) {
     scope.document.addEventListener('gmcn-config', readFlag);
   }
 
-  gmcnInstall(scope, gmcnCore(), config);
+  // Fail safe: if installation throws for any reason, leave the page's
+  // networking completely untouched rather than risk breaking Maps.
+  try {
+    gmcnInstall(scope, gmcnCore(), config);
+  } catch (e) {
+    try { console.warn('[GMaps CN Corrector] install failed:', e); } catch (e2) { /* ignore */ }
+  }
 })();
