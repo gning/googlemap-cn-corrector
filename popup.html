@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font: 13px/1.5 system-ui, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 14px 16px;
+      width: 260px;
+      color: #1f1f1f;
+      background: #fff;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { color: #e8eaed; background: #202124; }
+      .hint { color: #9aa0a6; }
+    }
+    h1 { font-size: 14px; margin: 0 0 10px; }
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    input[type="checkbox"] { width: 16px; height: 16px; }
+    .hint { margin: 10px 0 0; color: #5f6368; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Google Maps CN Satellite Corrector<br>谷歌地图卫星图纠偏</h1>
+  <label>
+    <input type="checkbox" id="enabled">
+    <span>Enable correction / 启用纠偏</span>
+  </label>
+  <p class="hint" id="hint">Reload the Google Maps tab after changing this.<br>
+  修改后请刷新谷歌地图页面。</p>
+</body>
+<script src="popup.js"></script>
+</html>
